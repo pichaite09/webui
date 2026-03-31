@@ -39,3 +39,26 @@
 - `cover_url`
 - `local_video_path`
 - `status`
+
+## Docker Auto Start On Ubuntu
+
+โปรเจกต์มีไฟล์ `docker-compose.yml` ที่ตั้ง `restart: unless-stopped` ไว้แล้ว และมี template systemd service ชื่อ `video-posting-manager.service`
+
+วิธีใช้บน Ubuntu:
+
+1. clone โปรเจกต์ไปยัง path จริง เช่น `/opt/webui`
+2. แก้ `WorkingDirectory=/opt/webui` ในไฟล์ `video-posting-manager.service` ถ้า path จริงไม่ตรงกัน
+3. คัดลอกไฟล์ไปไว้ที่ `/etc/systemd/system/`
+4. รันคำสั่ง:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now video-posting-manager.service
+```
+
+เช็กสถานะ:
+
+```bash
+sudo systemctl status video-posting-manager.service
+sudo docker compose ps
+```
