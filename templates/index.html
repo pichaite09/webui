@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Video Posting Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body data-editing="{{ 'true' if editing_video or editing_upload else 'false' }}" data-page-mode="{{ page_mode }}">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark">VM</span>
+          <div>
+            <p class="eyebrow">{{ 'Database Workspace' if page_mode == 'database' else 'Upload API Workspace' }}</p>
+            <h1>{{ 'รายการวิดีโอจากฐานข้อมูล' if page_mode == 'database' else 'รายการ Upload Job จาก API' }}</h1>
+            <p class="topbar-copy">
+              {{ 'ดูข้อมูลที่เก็บในฐานข้อมูล แก้ไขรายการ และสั่งส่งงานไปยัง Upload API ได้จากหน้านี้' if page_mode == 'database' else 'ดูข้อมูลล่าสุดจาก Upload API โดยตรง แยกออกจากข้อมูลในฐานข้อมูลอย่างชัดเจน' }}
+            </p>
+          </div>
+        </div>
+
+        <div class="topbar-side">
+          <nav class="page-switcher" aria-label="View switcher">
+            <a class="page-switch {{ 'is-active' if page_mode == 'database' else '' }}" href="{{ url_for('index') }}">Database</a>
+            <a class="page-switch {{ 'is-active' if page_mode == 'api' else '' }}" href="{{ url_for('api_jobs_page') }}">API</a>
+          </nav>
+
+          <div class="status-pill {{ 'is-ok' if (page_mode == 'database' and not reference_error) or (page_mode == 'api' and not api_jobs_error and not upload_summary_error) else 'is-bad' }}">
+            <span class="status-dot"></span>
+            {% if page_mode == 'database' %}
+              {{ 'Reference API พร้อมใช้งาน' if not reference_error else 'Reference API มีปัญหา' }}
+            {% else %}
+              {{ 'Upload API พร้อมใช้งาน' if not api_jobs_error and not upload_summary_error else 'Upload API มีปัญหา' }}
+            {% endif %}
+          </div>
+
+          
+        </div>
+      </header>
+
+      <section class="summary-strip">
+        {% if page_mode == 'database' %}
+          <article class="summary-card">
+            <span class="summary-label">รายการใน Database</span>
+            <strong>{{ database_summary.total_videos }}</strong>
+            <small>จำนวนรายการทั้งหมดในฐานข้อมูล</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Ready</span>
+            <strong>{{ database_summary.ready_count }}</strong>
+            <small>รายการที่พร้อมส่ง</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Draft</span>
+            <strong>{{ database_summary.draft_count }}</strong>
+            <small>รายการที่อยู่สถานะ draft</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">มี Upload Job</span>
+            <strong>{{ database_summary.with_upload_job_count }}</strong>
+            <small>รายการที่ส่งไป API แล้ว</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">ยังไม่ส่ง</span>
+            <strong>{{ database_summary.without_upload_job_count }}</strong>
+            <small>รายการที่ยังไม่มี Upload Job</small>
+          </article>
+        {% else %}
+          <article class="summary-card">
+            <span class="summary-label">รายการใน API</span>
+            <strong>{{ videos|length }}</strong>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Upload Jobs</span>
+            <strong class="js-upload-summary-value" data-summary-key="total_jobs">{{ upload_summary.total_jobs }}</strong>
+            <small>งานทั้งหมดใน Upload API</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Running</span>
+            <strong class="js-upload-summary-value" data-summary-key="running_count">{{ upload_summary.running_count }}</strong>
+            <small>งานที่กำลังรัน</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Success</span>
+            <strong class="js-upload-summary-value" data-summary-key="success_count">{{ upload_summary.success_count }}</strong>
+            <small>งานที่สำเร็จ</small>
+          </article>
+          <article class="summary-card summary-card-metric">
+            <span class="summary-label">Failed</span>
+            <strong class="js-upload-summary-value" data-summary-key="failed_count">{{ upload_summary.failed_count }}</strong>
+            <small>งานที่มีปัญหา</small>
+          </article>
+        {% endif %}
+      </section>
+
+      {% if page_mode == 'api' and upload_summary_error %}
+        <section class="reference-warning">
+          <strong>Upload API summary ยังไม่พร้อมใช้งาน</strong>
+          <p>{{ upload_summary_error }}</p>
+        </section>
+      {% endif %}
+
+      {% if page_mode == 'api' and api_jobs_error %}
+        <section class="reference-warning">
+          <strong>Upload API รายการงานยังไม่พร้อมใช้งาน</strong>
+          <p>{{ api_jobs_error }}</p>
+        </section>
+      {% endif %}
+
+      {% if reference_error %}
+        <section class="reference-warning">
+          <strong>Reference API ยังไม่พร้อมใช้งาน</strong>
+          <p>{{ reference_error }}</p>
+          <p>รายการยังแสดงต่อได้ แต่ชื่อ Device, Platform, Account และ Workflow อาจ fallback เป็นหมายเลขชั่วคราว</p>
+        </section>
+      {% endif %}
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+
+      <main class="queue-panel">
+        <div class="panel-header queue-header">
+          <div>
+            <p class="section-kicker">Queue Browser</p>
+            <h2>{{ 'รายการจาก Database' if page_mode == 'database' else 'รายการจาก Upload API' }}</h2>
+            {% if page_mode == 'database' %}
+              <button id="openCreateModal" class="primary-button" type="button">เพิ่มวิดีโอ</button>
+            {% endif %}
+            
+          </div>
+          <div id="resultsMeta" class="results-meta" data-total-items="{{ total_items }}">
+            แสดง {{ page_start }}-{{ page_end }} จาก {{ total_items }} รายการ
+          </div>
+        </div>
+
+        <section class="filter-bar">
+          <label class="filter-control search-control">
+            <span>ค้นหา</span>
+            <input
+              id="videoSearchInput"
+              type="search"
+              placeholder="{{ 'ค้นหาจากชื่อ, code, Device, Account' if page_mode == 'database' else 'ค้นหาจากชื่อ, Upload Job, Device, Account' }}"
+            >
+          </label>
+
+          <label class="filter-control">
+            <span>สถานะ</span>
+            <select id="statusFilter">
+              <option value="all">ทั้งหมด</option>
+              {% for option in (['ready', 'draft'] if page_mode == 'database' else ['ready', 'draft', 'queued', 'running', 'success', 'failed', 'posted', 'archived']) %}
+                <option value="{{ option }}">{{ option }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </section>
+
+        {% if videos %}
+          <div class="cards" id="videoCards">
+            {% for video in videos %}
+              <article
+                class="video-card"
+                data-video-id="{{ video.id }}"
+                data-base-search="{{ (video.title ~ ' ' ~ video.code_product ~ ' ' ~ video.video_platform_display ~ ' ' ~ (video.tags|join(' ')))|lower }}"
+                data-search="{{ (video.title ~ ' ' ~ video.code_product ~ ' ' ~ video.video_platform_display ~ ' ' ~ video.device_display ~ ' ' ~ video.platform_display ~ ' ' ~ video.account_display ~ ' ' ~ video.workflow_display ~ ' ' ~ (video.tags|join(' ')))|lower }}"
+                data-status="{{ video.status|lower }}"
+              >
+                <div class="video-card-media">
+                  {% if video.cover_url %}
+                    <img class="cover-thumb" src="{{ video.cover_url }}" alt="cover {{ video.title }}">
+                  {% else %}
+                    <div class="cover-fallback">
+                      <span>{{ video.title[:1]|upper }}</span>
+                    </div>
+                  {% endif %}
+                </div>
+
+                <div class="video-card-body">
+                  <div class="video-card-head">
+                    <div class="meta-row">
+                      <span class="badge">#{{ video.id }}</span>
+                      <span class="badge badge-source badge-source-{{ video.display_source }}">{{ video.display_source_label }}</span>
+                      <span class="status status-{{ video.status|lower }}">{{ video.status }}</span>
+                    </div>
+                    <h3>{{ video.title }}</h3>
+                    <p class="description">{{ video.description or 'ไม่มีรายละเอียดเพิ่มเติม' }}</p>
+                  </div>
+
+                  <div class="card-quick-grid">
+                    <div class="detail-card detail-card-compact">
+                      <span>code</span>
+                      <strong>{{ video.code_product }}</strong>
+                    </div>
+                    <div class="detail-card detail-card-compact">
+                      <span>Video Platform</span>
+                      <strong>{{ video.video_platform_display }}</strong>
+                    </div>
+                    <div class="detail-card detail-card-compact">
+                      <span>Device</span>
+                      <strong>{{ video.device_display }}</strong>
+                    </div>
+                    <div class="detail-card detail-card-compact">
+                      <span>Account</span>
+                      <strong>{{ video.account_display }}</strong>
+                    </div>
+                  </div>
+
+                  <details class="card-more">
+                    <summary>{{ 'รายละเอียดเพิ่มเติมและแก้ไขข้อมูล' if page_mode == 'database' else 'รายละเอียดเพิ่มเติม' }}</summary>
+
+                    {% if page_mode == 'database' %}
+                        <form
+                          class="inline-reference-form"
+                        action="{{ url_for('edit_video_reference', video_id=video.id, page=current_page) }}"
+                        data-video-id="{{ video.id }}"
+                      >
+                        <div class="detail-grid">
+                          <label class="detail-card detail-field">
+                            <span>Device</span>
+                            <select class="inline-select inline-device" name="device_id" required>
+                              {% set device_match = device_options|selectattr('id', 'equalto', video.device_id)|list %}
+                              {% if not device_match %}
+                                <option value="{{ video.device_id }}" selected>{{ video.device_display }}</option>
+                              {% endif %}
+                              {% for option in device_options %}
+                                <option value="{{ option.id }}" {% if option.id == video.device_id %}selected{% endif %}>{{ option.label }}</option>
+                              {% endfor %}
+                            </select>
+                            <small>เลือกได้ทันที</small>
+                          </label>
+
+                          <label class="detail-card detail-field">
+                            <span>Platform</span>
+                            <select
+                              class="inline-select inline-platform"
+                              name="device_platform_id"
+                              data-selected="{{ video.device_platform_id }}"
+                              required
+                            >
+                              <option value="{{ video.device_platform_id }}" selected>{{ video.platform_display }}</option>
+                            </select>
+                            <small class="inline-hint inline-platform-hint">โหลดตาม Device ที่เลือก</small>
+                          </label>
+
+                          <label class="detail-card detail-field">
+                            <span>Account</span>
+                            <select
+                              class="inline-select inline-account"
+                              name="account_id"
+                              data-selected="{{ video.account_id }}"
+                              required
+                            >
+                              <option value="{{ video.account_id }}" selected>{{ video.account_display }}</option>
+                            </select>
+                            <small class="inline-hint inline-account-hint">โหลดตาม Platform ที่เลือก</small>
+                          </label>
+
+                          <label class="detail-card detail-field">
+                            <span>Workflow</span>
+                            <select class="inline-select inline-workflow" name="workflow_id" required>
+                              {% set workflow_match = workflow_options|selectattr('id', 'equalto', video.workflow_id)|list %}
+                              {% if not workflow_match %}
+                                <option value="{{ video.workflow_id }}" selected>{{ video.workflow_display }}</option>
+                              {% endif %}
+                              {% for option in workflow_options %}
+                                <option value="{{ option.id }}" {% if option.id == video.workflow_id %}selected{% endif %}>{{ option.label }}</option>
+                              {% endfor %}
+                            </select>
+                            <small>เลือกได้ทันที</small>
+                          </label>
+                        </div>
+
+                        <div class="inline-editor-bar">
+                          <p class="inline-save-status" aria-live="polite"></p>
+                          <button class="small-button inline-save-button" type="submit">บันทึก Device / Platform / Account / Workflow</button>
+                        </div>
+                      </form>
+                    {% endif %}
+
+                    <div class="card-links">
+                      {% if video.link_product %}
+                        <a href="{{ video.link_product }}" target="_blank" rel="noreferrer">ลิงก์สินค้า</a>
+                      {% endif %}
+                      {% if video.video_url %}
+                        <a href="{{ video.video_url }}" target="_blank" rel="noreferrer">ไฟล์วิดีโอ</a>
+                      {% endif %}
+                      {% if video.cover_url %}
+                        <a href="{{ video.cover_url }}" target="_blank" rel="noreferrer">ภาพปก</a>
+                      {% endif %}
+                      {% if video.upload_job_id %}
+                        <a href="{{ upload_api_base_url }}/api/uploads/{{ video.upload_job_id }}" target="_blank" rel="noreferrer">Upload Job</a>
+                      {% endif %}
+                    </div>
+
+                    <div class="tag-row">
+                      {% if video.tags %}
+                        {% for tag in video.tags %}
+                          <span class="tag-chip">{{ tag }}</span>
+                        {% endfor %}
+                      {% else %}
+                        <span class="tag-chip muted">no tags</span>
+                      {% endif %}
+                    </div>
+
+                    <div
+                      class="upload-panel{% if page_mode == 'database' %} js-upload-panel{% endif %}"
+                      {% if page_mode == 'database' %}data-video-id="{{ video.id }}"{% endif %}
+                      data-upload-job-id="{{ video.upload_job_id or '' }}"
+                    >
+                      <div class="upload-panel-head">
+                        <div>
+                          <span class="upload-label">Upload Job</span>
+                          <strong>{{ video.upload_job_id if video.upload_job_id else 'ยังไม่ส่ง' }}</strong>
+                        </div>
+                        <span class="upload-state upload-state-{{ video.upload_status|lower|replace('_', '-') }}">
+                          {{ video.upload_status }}
+                        </span>
+                      </div>
+
+                      <div class="upload-meta-grid">
+                        <div>
+                          <span>ส่งล่าสุด</span>
+                          <strong>{{ video.uploaded_at_display }}</strong>
+                        </div>
+                        <div>
+                          <span>Source</span>
+                          <strong>{{ video.display_source_label }}</strong>
+                        </div>
+                        <div>
+                          <span>Upload API</span>
+                          <strong>{{ upload_api_base_url }}</strong>
+                        </div>
+                      </div>
+
+                      {% if video.display_source_error %}
+                        <div class="upload-display-note">Showing database snapshot because Upload API details are unavailable.</div>
+                      {% endif %}
+
+                      {% if video.last_error %}
+                        <div class="upload-error">{{ video.last_error }}</div>
+                      {% endif %}
+
+                      {% if video.result and video.result != {} %}
+                        <details class="upload-result">
+                          <summary>ดูผลลัพธ์ล่าสุดจาก Upload API</summary>
+                          <pre>{{ video.result_json_pretty }}</pre>
+                        </details>
+                      {% endif %}
+                    </div>
+                  </details>
+
+                  <div class="card-footer">
+                    <div class="time-stamp">
+                      <span>{{ 'อัปเดตล่าสุด' if page_mode == 'database' else 'เวลาจาก API' }}</span>
+                      <strong>{{ video.updated_at_display }}</strong>
+                    </div>
+
+                    {% if page_mode == 'database' %}
+                      <div class="card-actions">
+                        {% if not video.upload_job_id %}
+                          <form method="post" action="{{ url_for('send_video', video_id=video.id, page=current_page) }}">
+                            <button class="small-button" type="submit">ส่ง</button>
+                          </form>
+                        {% endif %}
+                        {% if not video.upload_job_id %}
+                          <form method="post" action="{{ url_for('send_and_run_video', video_id=video.id, page=current_page) }}">
+                            <button class="primary-button" type="submit">ส่งและรัน</button>
+                          </form>
+                        {% endif %}
+                        <a class="small-button" href="{{ url_for('index', edit=video.id, page=current_page) }}">แก้ไข</a>
+                        <form method="post" action="{{ url_for('remove_video', video_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบรายการนี้?');">
+                          <button class="danger-button" type="submit">ลบ</button>
+                        </form>
+                      </div>
+                    {% elif page_mode == 'api' %}
+                      <div class="card-actions">
+                        <a class="small-button" href="{{ url_for('api_jobs_page', edit_upload=video.id, page=current_page) }}">แก้ไข</a>
+                        <form method="post" action="{{ url_for('run_api_upload_job', upload_job_id=video.id, page=current_page) }}">
+                          <button class="small-button" type="submit">รัน Upload Job</button>
+                        </form>
+                        <form method="post" action="{{ url_for('delete_api_upload_job', upload_job_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบ Upload Job นี้?');">
+                          <button class="danger-button" type="submit">ลบ Upload Job</button>
+                        </form>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+
+          {% if total_pages > 1 %}
+            <nav class="pagination" aria-label="Pagination">
+              {% if page_mode == 'database' %}
+                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for('index', page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
+                {% for page_number in range(1, total_pages + 1) %}
+                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for('index', page=page_number) }}">{{ page_number }}</a>
+                {% endfor %}
+                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for('index', page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
+              {% else %}
+                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for('api_jobs_page', page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
+                {% for page_number in range(1, total_pages + 1) %}
+                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for('api_jobs_page', page=page_number) }}">{{ page_number }}</a>
+                {% endfor %}
+                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for('api_jobs_page', page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
+              {% endif %}
+            </nav>
+          {% endif %}
+
+          <div id="emptyFilterState" class="empty-state is-hidden">
+            <h3>ไม่พบรายการที่ตรงกับเงื่อนไข</h3>
+            <p>ลองเปลี่ยนคำค้นหา หรือเลือกสถานะอื่นเพื่อดูรายการเพิ่มเติม</p>
+          </div>
+        {% else %}
+          <div class="empty-state">
+            <h3>{{ 'ยังไม่มีข้อมูลวิดีโอ' if page_mode == 'database' else 'ยังไม่มี Upload Job จาก API' }}</h3>
+            <p>
+              {{ 'กดปุ่มสร้างรายการวิดีโอใหม่เพื่อเริ่มเพิ่มข้อมูลรายการแรก' if page_mode == 'database' else 'ตรวจสอบว่า Upload API พร้อมใช้งาน หรือสร้าง Upload Job ก่อนแล้วค่อยกลับมาดูหน้านี้' }}
+            </p>
+          </div>
+        {% endif %}
+      </main>
+    </div>
+
+    {% if page_mode == 'database' %}
+      <div id="videoModal" class="modal {{ 'is-open' if editing_video else '' }}" aria-hidden="{{ 'false' if editing_video else 'true' }}">
+        <div class="modal-backdrop" data-close-modal></div>
+        <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+          <div class="modal-header">
+            <div>
+              <p class="section-kicker">{{ 'Edit Entry' if editing_video else 'New Entry' }}</p>
+              <h2 id="modalTitle">{{ 'แก้ไขข้อมูลวิดีโอ' if editing_video else 'สร้างรายการวิดีโอใหม่' }}</h2>
+            </div>
+            <button class="modal-close" type="button" data-close-modal aria-label="ปิด popup">ปิด</button>
+          </div>
+
+          <form
+          class="video-form"
+          method="post"
+          action="{{ url_for('edit_video', video_id=editing_video.id, page=current_page) if editing_video else url_for('create_video', page=current_page) }}"
+        >
+            <section class="form-section">
+              <div class="section-head">
+                <div>
+                  <p class="section-kicker">Reference Setup</p>
+                  <h4>อุปกรณ์ แพลตฟอร์ม บัญชี และ workflow</h4>
+                </div>
+                <span class="section-badge">Auto from API</span>
+              </div>
+
+              <div class="field-grid two-col">
+                <label class="field">
+                  <span class="field-label">Device</span>
+                  <select id="deviceSelect" name="device_id" required>
+                    {% for option in device_options %}
+                      <option value="{{ option.id }}" {% if form_data.device_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <small class="field-note">ดึงจาก {{ reference_api_base_url }}/api/devices</small>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Platform</span>
+                  <select
+                    id="platformSelect"
+                    name="device_platform_id"
+                    data-selected="{{ form_data.device_platform_id }}"
+                    required
+                  >
+                    {% for option in platform_options %}
+                      <option value="{{ option.id }}" {% if form_data.device_platform_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <small id="platformHint" class="field-note">{{ platform_options|length }} รายการสำหรับ Device ที่เลือก</small>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Account</span>
+                  <select
+                    id="accountSelect"
+                    name="account_id"
+                    data-selected="{{ form_data.account_id }}"
+                    required
+                  >
+                    {% for option in account_options %}
+                      <option value="{{ option.id }}" {% if form_data.account_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <small id="accountHint" class="field-note">{{ account_options|length }} รายการสำหรับ Platform ที่เลือก</small>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Workflow</span>
+                  <select name="workflow_id" required>
+                    {% for option in workflow_options %}
+                      <option value="{{ option.id }}" {% if form_data.workflow_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <small class="field-note">ดึงจาก {{ reference_api_base_url }}/api/workflows</small>
+                </label>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="section-head">
+                <div>
+                  <p class="section-kicker">Content Detail</p>
+                  <h4>รายละเอียดโพสต์และข้อมูลสินค้า</h4>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span class="field-label">Video Platform</span>
+                  <input type="text" name="video_platform" value="{{ form_data.video_platform }}" placeholder="Shopee, TikTok, Facebook">
+                  <small class="field-note">เก็บว่าวิดีโอนี้ใช้สำหรับแพลตฟอร์มไหน</small>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Code Product</span>
+                  <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001" required>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Product Link</span>
+                  <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1" required>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Title</span>
+                  <input type="text" name="title" value="{{ form_data.title }}" placeholder="โพสต์ใหม่" required>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Description</span>
+                  <textarea name="description" rows="5" placeholder="รายละเอียดโพสต์">{{ form_data.description }}</textarea>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Tags</span>
+                  <input type="text" name="tags" value="{{ form_data.tags }}" placeholder="#iblanc, #sale">
+                  <small class="field-note">คั่นหลายแท็กด้วย comma</small>
+                </label>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="section-head">
+                <div>
+                  <p class="section-kicker">Media & Status</p>
+                  <h4>ไฟล์วิดีโอ ภาพปก และสถานะงาน</h4>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span class="field-label">Video URL</span>
+                  <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4" required>
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Cover URL</span>
+                  <input type="url" name="cover_url" value="{{ form_data.cover_url }}" placeholder="https://cdn.example.com/cover.jpg">
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Local Video Path</span>
+                  <input type="text" name="local_video_path" value="{{ form_data.local_video_path }}" placeholder="D:\\videos\\clip-01.mp4">
+                </label>
+
+                <label class="field">
+                  <span class="field-label">Status</span>
+                  <select name="status">
+                    {% for option in ['ready', 'draft'] %}
+                      <option value="{{ option }}" {% if form_data.status == option %}selected{% endif %}>{{ option }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section class="form-section">
+              <div class="section-head">
+                <div>
+                  <p class="section-kicker">Upload Metadata</p>
+                  <h4>ข้อมูลเพิ่มเติมสำหรับส่งเป็น Upload Job</h4>
+                </div>
+              </div>
+
+              <div class="field-grid">
+                <label class="field">
+                  <span class="field-label">Metadata JSON</span>
+                  <textarea name="metadata_json" rows="6" placeholder='{"campaign":"launch"}'>{{ form_data.metadata_json }}</textarea>
+                  <small class="field-note">ต้องเป็น JSON object เช่น {"campaign":"launch","source":"manual"}</small>
+                </label>
+              </div>
+            </section>
+
+            <div class="form-actions">
+              <button class="primary-button" type="submit">{{ 'บันทึกการแก้ไข' if editing_video else 'เพิ่มรายการ' }}</button>
+              {% if editing_video %}
+                <a class="secondary-button" href="{{ url_for('index', page=current_page) }}">ยกเลิก</a>
+              {% else %}
+                <button class="secondary-button" type="button" data-close-modal>ปิด</button>
+              {% endif %}
+            </div>
+          </form>
+        </section>
+      </div>
+    {% endif %}
+
+    {% if page_mode == 'api' %}
+      <div id="videoModal" class="modal {{ 'is-open' if editing_upload else '' }}" aria-hidden="{{ 'false' if editing_upload else 'true' }}">
+        <div class="modal-backdrop" data-close-modal></div>
+        <section class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="apiModalTitle">
+          <div class="modal-header">
+            <div>
+              <p class="section-kicker">Upload Job</p>
+              <h2 id="apiModalTitle">{{ 'แก้ไข Upload Job' if editing_upload else 'จัดการ Upload Job' }}</h2>
+            </div>
+            <button class="modal-close" type="button" data-close-modal aria-label="ปิด popup">ปิด</button>
+          </div>
+
+          {% if editing_upload %}
+            <form
+              class="video-form"
+              method="post"
+              action="{{ url_for('edit_api_upload_job', upload_job_id=editing_upload.id, page=current_page) }}"
+            >
+              <section class="form-section">
+                <div class="section-head">
+                  <div>
+                    <p class="section-kicker">Reference Setup</p>
+                    <h4>อุปกรณ์ แพลตฟอร์ม บัญชี และ workflow</h4>
+                  </div>
+                  <span class="section-badge">Upload Job #{{ editing_upload.id }}</span>
+                </div>
+
+                <div class="field-grid two-col">
+                  <label class="field">
+                    <span class="field-label">Device</span>
+                    <select id="deviceSelect" name="device_id" required>
+                      {% for option in device_options %}
+                        <option value="{{ option.id }}" {% if form_data.device_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                      {% endfor %}
+                    </select>
+                    <small class="field-note">ดึงจาก {{ reference_api_base_url }}/api/devices</small>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Platform</span>
+                    <select
+                      id="platformSelect"
+                      name="device_platform_id"
+                      data-selected="{{ form_data.device_platform_id }}"
+                      required
+                    >
+                      {% for option in platform_options %}
+                        <option value="{{ option.id }}" {% if form_data.device_platform_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                      {% endfor %}
+                    </select>
+                    <small id="platformHint" class="field-note">{{ platform_options|length }} รายการสำหรับ Device ที่เลือก</small>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Account</span>
+                    <select
+                      id="accountSelect"
+                      name="account_id"
+                      data-selected="{{ form_data.account_id }}"
+                      required
+                    >
+                      {% for option in account_options %}
+                        <option value="{{ option.id }}" {% if form_data.account_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                      {% endfor %}
+                    </select>
+                    <small id="accountHint" class="field-note">{{ account_options|length }} รายการสำหรับ Platform ที่เลือก</small>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Workflow</span>
+                    <select name="workflow_id" required>
+                      {% for option in workflow_options %}
+                        <option value="{{ option.id }}" {% if form_data.workflow_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                      {% endfor %}
+                    </select>
+                    <small class="field-note">ดึงจาก {{ reference_api_base_url }}/api/workflows</small>
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="section-head">
+                  <div>
+                    <p class="section-kicker">Content Detail</p>
+                    <h4>รายละเอียด Upload Job และข้อมูลสินค้า</h4>
+                  </div>
+                </div>
+
+                <div class="field-grid">
+                  <label class="field">
+                    <span class="field-label">Code Product</span>
+                    <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001" required>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Product Link</span>
+                    <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1" required>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Title</span>
+                    <input type="text" name="title" value="{{ form_data.title }}" placeholder="โพสต์ใหม่" required>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Description</span>
+                    <textarea name="description" rows="5" placeholder="รายละเอียดโพสต์">{{ form_data.description }}</textarea>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Tags</span>
+                    <input type="text" name="tags" value="{{ form_data.tags }}" placeholder="#iblanc, #sale">
+                    <small class="field-note">คั่นหลายแท็กด้วย comma</small>
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="section-head">
+                  <div>
+                    <p class="section-kicker">Media & Status</p>
+                    <h4>ไฟล์วิดีโอ ภาพปก และสถานะงาน</h4>
+                  </div>
+                </div>
+
+                <div class="field-grid">
+                  <label class="field">
+                    <span class="field-label">Video URL</span>
+                    <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4" required>
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Cover URL</span>
+                    <input type="url" name="cover_url" value="{{ form_data.cover_url }}" placeholder="https://cdn.example.com/cover.jpg">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Local Video Path</span>
+                    <input type="text" name="local_video_path" value="{{ form_data.local_video_path }}" placeholder="D:\\videos\\clip-01.mp4">
+                  </label>
+
+                  <label class="field">
+                    <span class="field-label">Status</span>
+                    <select name="status">
+                      {% for option in ['draft', 'queued', 'running', 'success', 'failed', 'posted', 'archived'] %}
+                        <option value="{{ option }}" {% if form_data.status == option %}selected{% endif %}>{{ option }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              <section class="form-section">
+                <div class="section-head">
+                  <div>
+                    <p class="section-kicker">Upload Metadata</p>
+                    <h4>ข้อมูลเพิ่มเติมของ Upload Job</h4>
+                  </div>
+                </div>
+
+                <div class="field-grid">
+                  <label class="field">
+                    <span class="field-label">Metadata JSON</span>
+                    <textarea name="metadata_json" rows="6" placeholder='{"campaign":"launch"}'>{{ form_data.metadata_json }}</textarea>
+                    <small class="field-note">ต้องเป็น JSON object เช่น {"campaign":"launch","source":"manual"}</small>
+                  </label>
+                </div>
+              </section>
+
+              <div class="form-actions">
+                <button class="primary-button" type="submit">บันทึก Upload Job</button>
+                <a class="secondary-button" href="{{ url_for('api_jobs_page', page=current_page) }}">ยกเลิก</a>
+              </div>
+            </form>
+          {% else %}
+            <div class="empty-state">
+              <h3>ไม่พบ Upload Job ที่ต้องการแก้ไข</h3>
+              <p>ลองกลับไปเลือกรายการใหม่จากหน้า API อีกครั้ง</p>
+            </div>
+          {% endif %}
+        </section>
+      </div>
+    {% endif %}
+
+    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  </body>
+</html>

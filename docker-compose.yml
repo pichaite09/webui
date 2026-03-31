@@ -1,0 +1,11 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: video-posting-manager
+    env_file:
+      - .env
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
