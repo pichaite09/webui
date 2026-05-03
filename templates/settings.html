@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Settings - Video Posting Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark">VM</span>
+          <div>
+            <p class="eyebrow">Configuration</p>
+            <h1>Settings</h1>
+            <p class="topbar-copy">ตรวจสอบค่าการเชื่อมต่อของฐานข้อมูลและ T001 API โดยซ่อนรหัสผ่านและ API key</p>
+          </div>
+        </div>
+
+        <div class="topbar-side">
+          <nav class="page-switcher" aria-label="View switcher">
+            <a class="page-switch" href="{{ url_for('index') }}">Database</a>
+            <a class="page-switch" href="{{ url_for('api_jobs_page') }}">API</a>
+            <a class="page-switch is-active" href="{{ url_for('settings_page') }}">Settings</a>
+          </nav>
+        </div>
+      </header>
+
+      <section class="health-strip" aria-label="สถานะระบบ">
+        <div class="health-overview {{ 'is-ok' if health_status.ok else 'is-bad' }}">
+          <span class="status-dot"></span>
+          <div>
+            <strong>{{ 'ระบบพร้อมใช้งาน' if health_status.ok else 'ระบบบางส่วนยังไม่พร้อม' }}</strong>
+            <small>{{ health_status.ok_count }}/{{ health_status.total_count }} service พร้อมใช้งาน</small>
+          </div>
+        </div>
+        <div class="health-services">
+          {% for service in health_status.services %}
+            <article class="health-service {{ 'is-ok' if service.ok else 'is-bad' }}">
+              <span>{{ service.label }}</span>
+              <strong>{{ 'พร้อม' if service.ok else 'มีปัญหา' }}</strong>
+              <small>{{ service.message }}</small>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <main class="settings-grid">
+        <section class="settings-card">
+          <p class="section-kicker">Database</p>
+          <h2>PostgreSQL</h2>
+          <dl class="settings-list">
+            <div><dt>Host</dt><dd>{{ settings.database.host }}</dd></div>
+            <div><dt>Port</dt><dd>{{ settings.database.port }}</dd></div>
+            <div><dt>Database</dt><dd>{{ settings.database.name }}</dd></div>
+            <div><dt>User</dt><dd>{{ settings.database.user }}</dd></div>
+            <div><dt>Password</dt><dd>{{ settings.database.password }}</dd></div>
+          </dl>
+        </section>
+
+        <section class="settings-card">
+          <p class="section-kicker">T001 API</p>
+          <h2>Reference / Upload</h2>
+          <dl class="settings-list">
+            <div><dt>Reference URL</dt><dd>{{ settings.apis.reference_base_url }}</dd></div>
+            <div><dt>Reference Key</dt><dd>{{ settings.apis.reference_api_key }}</dd></div>
+            <div><dt>Upload URL</dt><dd>{{ settings.apis.upload_base_url }}</dd></div>
+            <div><dt>Upload Key</dt><dd>{{ settings.apis.upload_api_key }}</dd></div>
+          </dl>
+        </section>
+
+        <section class="settings-card">
+          <p class="section-kicker">UI Defaults</p>
+          <h2>List Behavior</h2>
+          <dl class="settings-list">
+            <div><dt>Default page size</dt><dd>{{ settings.defaults.items_per_page }}</dd></div>
+            <div><dt>Page size options</dt><dd>{{ settings.defaults.per_page_options|join(', ') }}</dd></div>
+          </dl>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

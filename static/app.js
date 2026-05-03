@@ -17,6 +17,8 @@
   const inlineReferenceForms = Array.from(document.querySelectorAll(".inline-reference-form"));
   const uploadPanels = Array.from(document.querySelectorAll(".js-upload-panel"));
   const uploadSummaryValues = Array.from(document.querySelectorAll(".js-upload-summary-value"));
+  const videoForms = Array.from(document.querySelectorAll(".video-form"));
+  const actionForms = Array.from(document.querySelectorAll("form"));
 
   function isEditingMode() {
     return body?.dataset.editing === "true";
@@ -246,6 +248,94 @@
         return;
       }
       element.textContent = String(item[key] ?? 0);
+    });
+  }
+
+  function fieldValue(form, name) {
+    return String(form.elements[name]?.value || "").trim();
+  }
+
+  function clearValidationErrors(form) {
+    form.querySelectorAll(".field-error").forEach((element) => element.remove());
+    form.querySelectorAll(".has-error").forEach((element) => element.classList.remove("has-error"));
+  }
+
+  function showFieldError(form, name, message) {
+    const field = form.elements[name];
+    const wrapper = field?.closest(".field");
+    if (!field || !wrapper) {
+      return;
+    }
+
+    wrapper.classList.add("has-error");
+    const error = document.createElement("small");
+    error.className = "field-error";
+    error.textContent = message;
+    wrapper.appendChild(error);
+  }
+
+  function validateVideoForm(form) {
+    clearValidationErrors(form);
+    const errors = [];
+
+    [
+      ["device_id", "กรุณาเลือก Device"],
+      ["workflow_id", "กรุณาเลือก Workflow"],
+      ["title", "กรุณากรอก Title"],
+      ["status", "กรุณาเลือก Status"],
+    ].forEach(([name, message]) => {
+      if (!fieldValue(form, name)) {
+        errors.push([name, message]);
+      }
+    });
+
+    if (!fieldValue(form, "video_url") && !fieldValue(form, "local_video_path")) {
+      errors.push(["video_url", "กรุณากรอก Video URL หรือ Local Video Path อย่างน้อยหนึ่งช่อง"]);
+      errors.push(["local_video_path", "กรุณากรอก Video URL หรือ Local Video Path อย่างน้อยหนึ่งช่อง"]);
+    }
+
+    const metadata = fieldValue(form, "metadata_json");
+    if (metadata) {
+      try {
+        const parsed = JSON.parse(metadata);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+          errors.push(["metadata_json", "Metadata ต้องเป็น JSON object"]);
+        }
+      } catch (_error) {
+        errors.push(["metadata_json", "Metadata ต้องเป็น JSON ที่ถูกต้อง"]);
+      }
+    }
+
+    errors.forEach(([name, message]) => showFieldError(form, name, message));
+    if (errors.length) {
+      form.querySelector(".has-error input, .has-error textarea, .has-error select")?.focus();
+    }
+    return errors.length === 0;
+  }
+
+  function bindVideoFormValidation(form) {
+    form.addEventListener("submit", function (event) {
+      if (!validateVideoForm(form)) {
+        event.preventDefault();
+      }
+    });
+  }
+
+  function bindLoadingState(form) {
+    form.addEventListener("submit", function (event) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      const submitButton = form.querySelector("button[type='submit']");
+      if (!submitButton || submitButton.disabled) {
+        return;
+      }
+
+      submitButton.dataset.originalText = submitButton.textContent;
+      submitButton.textContent = "กำลังทำงาน...";
+      submitButton.disabled = true;
+      form.classList.add("is-submitting");
     });
   }
 
@@ -557,20 +647,13 @@
     loadPlatforms(platformSelect.dataset.selected || platformSelect.value, accountSelect.dataset.selected || accountSelect.value);
   }
 
-  if (searchInput) {
-    searchInput.addEventListener("input", applyFilters);
-  }
-
-  if (statusFilter) {
-    statusFilter.addEventListener("change", applyFilters);
-  }
-
   if (modal?.classList.contains("is-open")) {
     body.classList.add("modal-active");
   }
 
   inlineReferenceForms.forEach(bindInlineReferenceForm);
+  videoForms.forEach(bindVideoFormValidation);
+  actionForms.forEach(bindLoadingState);
 
-  applyFilters();
   startUploadPolling();
 })();

@@ -43,16 +43,16 @@ def init_db() -> None:
                     CREATE TABLE IF NOT EXISTS video_posts (
                         id BIGSERIAL PRIMARY KEY,
                         device_id INTEGER NOT NULL,
-                        device_platform_id INTEGER NOT NULL,
-                        account_id INTEGER NOT NULL,
+                        device_platform_id INTEGER,
+                        account_id INTEGER,
                         workflow_id INTEGER NOT NULL,
                         video_platform TEXT NOT NULL DEFAULT '',
-                        code_product TEXT NOT NULL,
-                        link_product TEXT NOT NULL,
+                        code_product TEXT NOT NULL DEFAULT '',
+                        link_product TEXT NOT NULL DEFAULT '',
                         title TEXT NOT NULL,
                         description TEXT NOT NULL DEFAULT '',
                         tags TEXT[] NOT NULL DEFAULT '{}',
-                        video_url TEXT NOT NULL,
+                        video_url TEXT NOT NULL DEFAULT '',
                         cover_url TEXT NOT NULL DEFAULT '',
                         local_video_path TEXT NOT NULL DEFAULT '',
                         metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -109,10 +109,33 @@ def init_db() -> None:
                     ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ
                     """
                 )
+                cursor.execute("ALTER TABLE video_posts ALTER COLUMN device_platform_id DROP NOT NULL")
+                cursor.execute("ALTER TABLE video_posts ALTER COLUMN account_id DROP NOT NULL")
+                cursor.execute("ALTER TABLE video_posts ALTER COLUMN code_product SET DEFAULT ''")
+                cursor.execute("ALTER TABLE video_posts ALTER COLUMN link_product SET DEFAULT ''")
+                cursor.execute("ALTER TABLE video_posts ALTER COLUMN video_url SET DEFAULT ''")
                 cursor.execute(
                     """
                     CREATE INDEX IF NOT EXISTS idx_video_posts_updated_at
                     ON video_posts (updated_at DESC);
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS video_post_events (
+                        id BIGSERIAL PRIMARY KEY,
+                        video_id BIGINT,
+                        event_type TEXT NOT NULL,
+                        message TEXT NOT NULL DEFAULT '',
+                        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    );
+                    """
+                )
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_video_post_events_video_created
+                    ON video_post_events (video_id, created_at DESC);
                     """
                 )
                 cursor.execute("SELECT pg_advisory_unlock(824501)")

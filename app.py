@@ -19,11 +19,13 @@ app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "video-manager-secret")
 REFERENCE_API_BASE_URL = os.getenv("REFERENCE_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 REFERENCE_API_KEY = os.getenv("REFERENCE_API_KEY", "").strip()
 REFERENCE_TIMEOUT_SECONDS = 5
+HEALTH_TIMEOUT_SECONDS = 2
 
 UPLOAD_API_BASE_URL = os.getenv("UPLOAD_API_BASE_URL", REFERENCE_API_BASE_URL).rstrip("/")
 UPLOAD_API_KEY = os.getenv("UPLOAD_API_KEY", REFERENCE_API_KEY).strip()
 UPLOAD_TIMEOUT_SECONDS = 10
 ITEMS_PER_PAGE = 50
+PER_PAGE_OPTIONS = [25, 50, 100]
 
 
 def parse_tags(raw_tags: str) -> list[str]:
@@ -36,6 +38,15 @@ def parse_positive_int(raw_value: Any) -> int:
         return int(raw_value)
     except (TypeError, ValueError):
         return 0
+
+
+def parse_string(raw_value: Any) -> str:
+    return str(raw_value or "").strip()
+
+
+def optional_positive_int(raw_value: Any) -> int | None:
+    value = parse_positive_int(raw_value)
+    return value if value > 0 else None
 
 
 def parse_metadata_json(raw_value: str) -> tuple[dict[str, Any], str | None]:
@@ -60,10 +71,10 @@ def json_text(value: dict[str, Any]) -> str:
 
 def empty_form_data() -> dict[str, Any]:
     return {
-        "device_id": 1,
-        "device_platform_id": 2,
-        "account_id": 10,
-        "workflow_id": 13,
+        "device_id": 0,
+        "device_platform_id": 0,
+        "account_id": 0,
+        "workflow_id": 0,
         "video_platform": "",
         "code_product": "",
         "link_product": "",
@@ -80,10 +91,10 @@ def empty_form_data() -> dict[str, Any]:
 
 def empty_upload_job_form_data() -> dict[str, Any]:
     return {
-        "device_id": 1,
-        "device_platform_id": 2,
-        "account_id": 10,
-        "workflow_id": 13,
+        "device_id": 0,
+        "device_platform_id": 0,
+        "account_id": 0,
+        "workflow_id": 0,
         "code_product": "",
         "link_product": "",
         "title": "",
@@ -103,8 +114,8 @@ def form_to_payload(form: Any) -> dict[str, Any]:
 
     return {
         "device_id": parse_positive_int(form.get("device_id", 0)),
-        "device_platform_id": parse_positive_int(form.get("device_platform_id", 0)),
-        "account_id": parse_positive_int(form.get("account_id", 0)),
+        "device_platform_id": optional_positive_int(form.get("device_platform_id", 0)),
+        "account_id": optional_positive_int(form.get("account_id", 0)),
         "workflow_id": parse_positive_int(form.get("workflow_id", 0)),
         "video_platform": form.get("video_platform", "").strip(),
         "code_product": form.get("code_product", "").strip(),
@@ -128,8 +139,8 @@ def upload_job_form_to_payload(form: Any) -> dict[str, Any]:
 
     return {
         "device_id": parse_positive_int(form.get("device_id", 0)),
-        "device_platform_id": parse_positive_int(form.get("device_platform_id", 0)),
-        "account_id": parse_positive_int(form.get("account_id", 0)),
+        "device_platform_id": optional_positive_int(form.get("device_platform_id", 0)),
+        "account_id": optional_positive_int(form.get("account_id", 0)),
         "workflow_id": parse_positive_int(form.get("workflow_id", 0)),
         "code_product": form.get("code_product", "").strip(),
         "link_product": form.get("link_product", "").strip(),
@@ -148,8 +159,8 @@ def upload_job_form_to_payload(form: Any) -> dict[str, Any]:
 
 def validate_payload(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    required_numbers = ["device_id", "device_platform_id", "account_id", "workflow_id"]
-    required_strings = ["code_product", "link_product", "title", "video_url", "status"]
+    required_numbers = ["device_id", "workflow_id"]
+    required_strings = ["title", "status"]
 
     for field in required_numbers:
         if payload[field] <= 0:
@@ -161,14 +172,17 @@ def validate_payload(payload: dict[str, Any]) -> list[str]:
 
     if payload.get("_metadata_error"):
         errors.append(payload["_metadata_error"])
+
+    if not payload.get("video_url") and not payload.get("local_video_path"):
+        errors.append("video_url or local_video_path is required")
 
     return errors
 
 
 def validate_upload_job_payload(payload: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    required_numbers = ["device_id", "device_platform_id", "account_id", "workflow_id"]
-    required_strings = ["code_product", "link_product", "title", "video_url", "status"]
+    required_numbers = ["device_id", "workflow_id"]
+    required_strings = ["title", "status"]
 
     for field in required_numbers:
         if payload[field] <= 0:
@@ -181,43 +195,109 @@ def validate_upload_job_payload(payload: dict[str, Any]) -> list[str]:
     if payload.get("_metadata_error"):
         errors.append(payload["_metadata_error"])
 
+    if not payload.get("video_url") and not payload.get("local_video_path"):
+        errors.append("video_url or local_video_path is required")
+
     return errors
 
 
-def list_videos() -> list[dict[str, Any]]:
+VIDEO_SELECT_COLUMNS = """
+    id,
+    device_id,
+    device_platform_id,
+    account_id,
+    workflow_id,
+    video_platform,
+    code_product,
+    link_product,
+    title,
+    description,
+    tags,
+    video_url,
+    cover_url,
+    local_video_path,
+    metadata,
+    status,
+    upload_job_id,
+    upload_status,
+    last_error,
+    result,
+    uploaded_at,
+    created_at,
+    updated_at
+"""
+
+
+def build_video_filters(filters: dict[str, Any]) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    values: list[Any] = []
+
+    search_query = parse_string(filters.get("q"))
+    if search_query:
+        clauses.append(
+            """
+            (
+                title ILIKE %s
+                OR code_product ILIKE %s
+                OR video_platform ILIKE %s
+                OR description ILIKE %s
+                OR array_to_string(tags, ' ') ILIKE %s
+            )
+            """
+        )
+        pattern = f"%{search_query}%"
+        values.extend([pattern, pattern, pattern, pattern, pattern])
+
+    status = parse_string(filters.get("status"))
+    if status and status != "all":
+        clauses.append("lower(status) = lower(%s)")
+        values.append(status)
+
+    for field in ("device_id", "device_platform_id", "account_id", "workflow_id"):
+        value = optional_positive_int(filters.get(field))
+        if value:
+            clauses.append(f"{field} = %s")
+            values.append(value)
+
+    where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return where_clause, values
+
+
+def list_videos(
+    limit: int = ITEMS_PER_PAGE,
+    offset: int = 0,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    where_clause, values = build_video_filters(filters or {})
     with get_db() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
-                """
-                SELECT
-                    id,
-                    device_id,
-                    device_platform_id,
-                    account_id,
-                    workflow_id,
-                    video_platform,
-                    code_product,
-                    link_product,
-                    title,
-                    description,
-                    tags,
-                    video_url,
-                    cover_url,
-                    local_video_path,
-                    metadata,
-                    status,
-                    upload_job_id,
-                    upload_status,
-                    last_error,
-                    result,
-                    uploaded_at,
-                    created_at,
-                    updated_at
+                f"""
+                SELECT {VIDEO_SELECT_COLUMNS}
                 FROM video_posts
+                {where_clause}
                 ORDER BY updated_at DESC, id DESC
-                """
+                LIMIT %s OFFSET %s
+                """,
+                [*values, max(1, limit), max(0, offset)],
             )
             return cursor.fetchall()
+
+
+def count_videos(filters: dict[str, Any] | None = None) -> int:
+    where_clause, values = build_video_filters(filters or {})
+    with get_db() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)::int AS total
+                FROM video_posts
+                {where_clause}
+                """,
+                values,
+            )
+            row = cursor.fetchone() or {}
+    return int(row.get("total") or 0)
 
 
 def get_video(video_id: int) -> dict[str, Any] | None:
@@ -255,7 +335,7 @@ def get_video(video_id: int) -> dict[str, Any] | None:
             return cursor.fetchone()
 
 
-def insert_video(payload: dict[str, Any]) -> None:
+def insert_video(payload: dict[str, Any]) -> int:
     with get_db() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -294,10 +374,13 @@ def insert_video(payload: dict[str, Any]) -> None:
                     %(metadata_json)s::jsonb,
                     %(status)s
                 )
+                RETURNING id
                 """,
                 payload,
             )
+            row = cursor.fetchone() or {}
         connection.commit()
+        return int(row.get("id") or 0)
 
 
 def update_video(video_id: int, payload: dict[str, Any]) -> bool:
@@ -426,6 +509,58 @@ def delete_video(video_id: int) -> bool:
         return deleted
 
 
+def record_video_event(
+    video_id: int | None,
+    event_type: str,
+    message: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    with get_db() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO video_post_events (video_id, event_type, message, payload)
+                VALUES (%s, %s, %s, %s::jsonb)
+                """,
+                (video_id, event_type, message, json_text(payload or {})),
+            )
+        connection.commit()
+
+
+def list_recent_video_events(video_ids: list[int], limit_per_video: int = 5) -> dict[int, list[dict[str, Any]]]:
+    if not video_ids:
+        return {}
+
+    with get_db() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, video_id, event_type, message, payload, created_at
+                FROM (
+                    SELECT
+                        id,
+                        video_id,
+                        event_type,
+                        message,
+                        payload,
+                        created_at,
+                        ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY created_at DESC, id DESC) AS row_number
+                    FROM video_post_events
+                    WHERE video_id = ANY(%s)
+                ) ranked_events
+                WHERE row_number <= %s
+                ORDER BY video_id, created_at DESC, id DESC
+                """,
+                (video_ids, max(1, limit_per_video)),
+            )
+            rows = cursor.fetchall()
+
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(int(row["video_id"]), []).append(row)
+    return grouped
+
+
 def api_headers(api_key: str) -> dict[str, str]:
     headers = {"Accept": "application/json"}
     if api_key:
@@ -528,6 +663,24 @@ def default_database_summary() -> dict[str, int]:
     }
 
 
+def fetch_database_summary() -> dict[str, int]:
+    with get_db() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*)::int AS total_videos,
+                    COUNT(*) FILTER (WHERE lower(status) = 'ready')::int AS ready_count,
+                    COUNT(*) FILTER (WHERE lower(status) = 'draft')::int AS draft_count,
+                    COUNT(*) FILTER (WHERE upload_job_id IS NOT NULL)::int AS with_upload_job_count,
+                    COUNT(*) FILTER (WHERE upload_job_id IS NULL)::int AS without_upload_job_count
+                FROM video_posts
+                """
+            )
+            row = cursor.fetchone() or {}
+    return {**default_database_summary(), **row}
+
+
 def compute_database_summary(videos: list[dict[str, Any]]) -> dict[str, int]:
     summary = default_database_summary()
     summary["total_videos"] = len(videos)
@@ -546,18 +699,20 @@ def normalize_page(raw_page: Any) -> int:
     return max(page, 1)
 
 
-def paginate_items(items: list[dict[str, Any]], page: int, per_page: int = ITEMS_PER_PAGE) -> dict[str, Any]:
-    total_items = len(items)
+def normalize_per_page(raw_per_page: Any) -> int:
+    per_page = parse_positive_int(raw_per_page)
+    return per_page if per_page in PER_PAGE_OPTIONS else ITEMS_PER_PAGE
+
+
+def pagination_from_total(total_items: int, page: int, per_page: int = ITEMS_PER_PAGE) -> dict[str, Any]:
     total_pages = max((total_items + per_page - 1) // per_page, 1)
     current_page = min(max(page, 1), total_pages)
     start_index = (current_page - 1) * per_page
     end_index = start_index + per_page
-    paged_items = items[start_index:end_index]
     page_start = start_index + 1 if total_items else 0
     page_end = min(end_index, total_items)
 
     return {
-        "items": paged_items,
         "current_page": current_page,
         "per_page": per_page,
         "total_items": total_items,
@@ -565,6 +720,55 @@ def paginate_items(items: list[dict[str, Any]], page: int, per_page: int = ITEMS
         "page_start": page_start,
         "page_end": page_end,
     }
+
+
+def paginate_items(items: list[dict[str, Any]], page: int, per_page: int = ITEMS_PER_PAGE) -> dict[str, Any]:
+    pagination = pagination_from_total(len(items), page, per_page)
+    start_index = (pagination["current_page"] - 1) * per_page
+    end_index = start_index + per_page
+    return {**pagination, "items": items[start_index:end_index]}
+
+
+def page_offset(page: int, per_page: int = ITEMS_PER_PAGE) -> int:
+    return (max(page, 1) - 1) * max(1, per_page)
+
+
+def filter_state_from_request() -> dict[str, Any]:
+    return {
+        "q": parse_string(request.args.get("q")),
+        "status": parse_string(request.args.get("status")) or "all",
+        "device_id": parse_positive_int(request.args.get("device_id")),
+        "device_platform_id": parse_positive_int(request.args.get("device_platform_id")),
+        "account_id": parse_positive_int(request.args.get("account_id")),
+        "workflow_id": parse_positive_int(request.args.get("workflow_id")),
+    }
+
+
+def active_filter_params(filters: dict[str, Any], per_page: int) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for key, value in filters.items():
+        if value not in (None, "", 0, "all"):
+            params[key] = value
+    if per_page != ITEMS_PER_PAGE:
+        params["per_page"] = per_page
+    return params
+
+
+def page_url_params(filters: dict[str, Any], per_page: int, page: int | None = None) -> dict[str, Any]:
+    params = active_filter_params(filters, per_page)
+    if page and page > 1:
+        params["page"] = page
+    return params
+
+
+@app.context_processor
+def template_helpers():
+    def url_for_with_params(endpoint: str, base_params: dict[str, Any] | None = None, **values: Any) -> str:
+        merged = dict(base_params or {})
+        merged.update(values)
+        return url_for(endpoint, **merged)
+
+    return {"url_for_with_params": url_for_with_params}
 
 
 def fetch_upload_summary() -> dict[str, Any]:
@@ -584,8 +788,96 @@ def fetch_upload_jobs(filters: dict[str, Any] | None = None) -> list[dict[str, A
     return upload_api_request(path).get("items", [])
 
 
+def fetch_upload_jobs_page(
+    limit: int,
+    offset: int,
+    filters: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    query_params: dict[str, Any] = {"limit": limit, "offset": offset, "include_total": 1}
+    for key in ("status", "device_id", "device_platform_id", "account_id", "workflow_id"):
+        value = (filters or {}).get(key)
+        if value not in (None, "", 0, "all"):
+            query_params[key] = value
+    response = upload_api_request(
+        f"/api/uploads?{urlencode(query_params)}"
+    )
+    return response.get("items", []), response.get("page", {})
+
+
 def fetch_upload_job_item(upload_job_id: int) -> dict[str, Any]:
     return upload_api_request(f"/api/uploads/{upload_job_id}").get("item", {})
+
+
+def check_db_health() -> dict[str, Any]:
+    try:
+        with get_db() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 AS ok")
+                cursor.fetchone()
+        return {"ok": True, "label": "Database", "message": "เชื่อมต่อฐานข้อมูลได้"}
+    except Exception as error:
+        return {"ok": False, "label": "Database", "message": str(error)}
+
+
+def check_api_health(label: str, base_url: str, api_key: str) -> dict[str, Any]:
+    try:
+        response = request_api_json(
+            base_url=base_url,
+            api_key=api_key,
+            path="/api/health",
+            timeout_seconds=HEALTH_TIMEOUT_SECONDS,
+        )
+        item = response.get("item", {})
+        status = item.get("status", "ok")
+        return {"ok": True, "label": label, "message": f"พร้อมใช้งาน ({status})"}
+    except RuntimeError as error:
+        return {"ok": False, "label": label, "message": str(error)}
+
+
+def build_health_status() -> dict[str, Any]:
+    services = [
+        check_db_health(),
+        check_api_health("Reference API", REFERENCE_API_BASE_URL, REFERENCE_API_KEY),
+        check_api_health("Upload API", UPLOAD_API_BASE_URL, UPLOAD_API_KEY),
+    ]
+    ok_count = sum(1 for service in services if service["ok"])
+    return {
+        "ok": ok_count == len(services),
+        "ok_count": ok_count,
+        "total_count": len(services),
+        "services": services,
+    }
+
+
+def mask_secret(value: str) -> str:
+    cleaned = parse_string(value)
+    if not cleaned:
+        return ""
+    if len(cleaned) <= 6:
+        return "******"
+    return f"{cleaned[:2]}...{cleaned[-2:]}"
+
+
+def build_settings_context() -> dict[str, Any]:
+    return {
+        "database": {
+            "host": os.getenv("DB_HOST", "192.168.1.211"),
+            "port": os.getenv("DB_PORT", "5432"),
+            "name": os.getenv("DB_NAME", "n8n"),
+            "user": os.getenv("DB_USER", "n8n"),
+            "password": mask_secret(os.getenv("DB_PASSWORD", "")),
+        },
+        "apis": {
+            "reference_base_url": REFERENCE_API_BASE_URL,
+            "reference_api_key": mask_secret(REFERENCE_API_KEY),
+            "upload_base_url": UPLOAD_API_BASE_URL,
+            "upload_api_key": mask_secret(UPLOAD_API_KEY),
+        },
+        "defaults": {
+            "items_per_page": ITEMS_PER_PAGE,
+            "per_page_options": PER_PAGE_OPTIONS,
+        },
+    }
 
 
 def load_upload_job_overrides(videos: list[dict[str, Any]]) -> tuple[dict[int, dict[str, Any]], dict[int, str]]:
@@ -683,6 +975,10 @@ def build_lookup(items: list[dict[str, Any]], label_key: str) -> dict[int, str]:
     return {item["id"]: item[label_key] for item in items}
 
 
+def fallback_label(label: str, item_id: int | None) -> str:
+    return f"{label} #{item_id}" if item_id else "-"
+
+
 def format_display_datetime(value: Any) -> str:
     if not value:
         return "-"
@@ -714,6 +1010,7 @@ def enrich_videos(
     prefer_upload_api: bool = True,
 ) -> list[dict[str, Any]]:
     enriched = []
+    event_lookup = list_recent_video_events([int(video["id"]) for video in videos if video.get("id")])
     for video in videos:
         if prefer_upload_api:
             video_display = merge_video_display_data(video, upload_job_items.get(video.get("upload_job_id")))
@@ -726,18 +1023,26 @@ def enrich_videos(
         enriched.append(
             {
                 **video_display,
-                "device_display": device_lookup.get(video_display["device_id"], f"Device #{video_display['device_id']}"),
+                "device_display": device_lookup.get(video_display["device_id"], fallback_label("Device", video_display.get("device_id"))),
                 "platform_display": platform_lookup.get(
-                    video_display["device_platform_id"], f"Platform #{video_display['device_platform_id']}"
+                    video_display["device_platform_id"], fallback_label("Platform", video_display.get("device_platform_id"))
                 ),
-                "account_display": account_lookup.get(video_display["account_id"], f"Account #{video_display['account_id']}"),
-                "workflow_display": workflow_lookup.get(video_display["workflow_id"], f"Workflow #{video_display['workflow_id']}"),
+                "account_display": account_lookup.get(
+                    video_display["account_id"], fallback_label("Account", video_display.get("account_id"))
+                ),
+                "workflow_display": workflow_lookup.get(
+                    video_display["workflow_id"], fallback_label("Workflow", video_display.get("workflow_id"))
+                ),
                 "video_platform_display": video_display.get("video_platform") or "-",
                 "metadata_json_pretty": json.dumps(video_display.get("metadata") or {}, ensure_ascii=False, indent=2),
                 "result_json_pretty": json.dumps(video_display.get("result") or {}, ensure_ascii=False, indent=2),
                 "uploaded_at_display": format_display_datetime(video_display.get("uploaded_at")),
                 "updated_at_display": format_display_datetime(video_display.get("updated_at")),
                 "display_source_error": upload_job_errors.get(video.get("upload_job_id"), ""),
+                "audit_events": [
+                    {**event, "created_at_display": format_display_datetime(event.get("created_at"))}
+                    for event in event_lookup.get(int(video["id"]), [])
+                ],
             }
         )
     return enriched
@@ -863,10 +1168,32 @@ def load_reference_bundle(
             build_option(workflow["id"], workflow_label(workflow), workflow.get("description", ""))
             for workflow in workflows
         ]
+        if not form_data.get("device_id") and device_options:
+            form_data["device_id"] = device_options[0]["id"]
+        if not form_data.get("workflow_id") and workflow_options:
+            active_workflow = next(
+                (workflow for workflow in workflows if workflow.get("is_active") and "upload" in (workflow.get("name") or "").lower()),
+                None,
+            ) or next(
+                (workflow for workflow in workflows if workflow.get("is_active")),
+                workflows[0] if workflows else None,
+            )
+            if active_workflow:
+                form_data["workflow_id"] = active_workflow["id"]
+        if form_data.get("device_id") and form_data["device_id"] not in platforms_by_device:
+            platforms = fetch_platforms(form_data["device_id"])
+            platforms_by_device[form_data["device_id"]] = platforms
+            all_platforms.extend(platforms)
         platform_options = [
             build_option(platform["id"], platform_label(platform), platform.get("package_name", ""))
             for platform in platforms_by_device.get(form_data["device_id"], [])
         ]
+        if not form_data.get("device_platform_id") and platform_options:
+            form_data["device_platform_id"] = platform_options[0]["id"]
+        if form_data.get("device_platform_id") and form_data["device_platform_id"] not in accounts_by_platform:
+            accounts = fetch_accounts(form_data["device_platform_id"])
+            accounts_by_platform[form_data["device_platform_id"]] = accounts
+            all_accounts.extend(accounts)
         account_options = [
             build_option(
                 account["id"],
@@ -875,6 +1202,8 @@ def load_reference_bundle(
             )
             for account in accounts_by_platform.get(form_data["device_platform_id"], [])
         ]
+        if not form_data.get("account_id") and account_options:
+            form_data["account_id"] = account_options[0]["id"]
 
         device_lookup = build_lookup(device_options, "label")
         platform_lookup = {platform["id"]: platform_label(platform) for platform in all_platforms}
@@ -953,20 +1282,28 @@ def redirect_with_page(endpoint: str, page: int | None = None, **values: Any):
     return redirect(url_for(endpoint, **values))
 
 
-def reference_payload_from_request() -> dict[str, int]:
+def redirect_back(endpoint: str, page: int | None = None, **values: Any):
+    for key in ("q", "status", "device_id", "device_platform_id", "account_id", "workflow_id", "per_page"):
+        value = request.args.get(key)
+        if value not in (None, "", "0", "all"):
+            values[key] = value
+    return redirect_with_page(endpoint, page, **values)
+
+
+def reference_payload_from_request() -> dict[str, Any]:
     source = request.get_json(silent=True) or request.form
     return {
         "device_id": parse_positive_int(source.get("device_id", 0)),
-        "device_platform_id": parse_positive_int(source.get("device_platform_id", 0)),
-        "account_id": parse_positive_int(source.get("account_id", 0)),
+        "device_platform_id": optional_positive_int(source.get("device_platform_id", 0)),
+        "account_id": optional_positive_int(source.get("account_id", 0)),
         "workflow_id": parse_positive_int(source.get("workflow_id", 0)),
     }
 
 
-def validate_reference_payload(payload: dict[str, int]) -> list[str]:
+def validate_reference_payload(payload: dict[str, Any]) -> list[str]:
     errors = []
-    for field, value in payload.items():
-        if value <= 0:
+    for field in ("device_id", "workflow_id"):
+        if payload[field] <= 0:
             errors.append(f"{field} ต้องมากกว่า 0")
     return errors
 
@@ -1196,6 +1533,8 @@ def refresh_video_upload_status(video_id: int) -> tuple[bool, str, dict[str, Any
 def index():
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
+    per_page = normalize_per_page(request.args.get("per_page"))
+    filters = filter_state_from_request()
     editing_id = request.args.get("edit", type=int)
     editing_video = get_video(editing_id) if editing_id else None
 
@@ -1205,9 +1544,14 @@ def index():
         form_data["tags"] = ", ".join(editing_video["tags"] or [])
         form_data["metadata_json"] = json.dumps(editing_video.get("metadata") or {}, ensure_ascii=False, indent=2)
 
-    all_videos = list_videos()
-    pagination = paginate_items(all_videos, current_page)
-    videos = pagination["items"]
+    database_summary = fetch_database_summary()
+    filtered_total = count_videos(filters)
+    pagination = pagination_from_total(filtered_total, current_page, per_page)
+    videos = list_videos(
+        limit=pagination["per_page"],
+        offset=page_offset(pagination["current_page"], pagination["per_page"]),
+        filters=filters,
+    )
     reference_bundle = load_reference_bundle(
         videos,
         form_data,
@@ -1222,7 +1566,11 @@ def index():
         editing_video=editing_video,
         editing_upload=None,
         api_jobs_error="",
-        database_summary=compute_database_summary(all_videos),
+        database_summary=database_summary,
+        filters=filters,
+        per_page_options=PER_PAGE_OPTIONS,
+        pagination_base_params=active_filter_params(filters, pagination["per_page"]),
+        health_status=build_health_status(),
         **pagination,
         **reference_bundle,
     )
@@ -1232,6 +1580,8 @@ def index():
 def api_jobs_page():
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
+    per_page = normalize_per_page(request.args.get("per_page"))
+    filters = filter_state_from_request()
     edit_upload_id = request.args.get("edit_upload", type=int)
     editing_upload = None
     form_data = empty_upload_job_form_data()
@@ -1248,7 +1598,18 @@ def api_jobs_page():
     api_jobs_error = ""
 
     try:
-        upload_jobs = fetch_upload_jobs()
+        summary_total = parse_positive_int(reference_bundle["upload_summary"].get("total_jobs"))
+        pagination = pagination_from_total(summary_total, current_page, per_page)
+        upload_jobs, api_page = fetch_upload_jobs_page(
+            pagination["per_page"],
+            page_offset(pagination["current_page"], pagination["per_page"]),
+            filters,
+        )
+        total_jobs = parse_positive_int(api_page.get("total"))
+        if total_jobs and total_jobs != summary_total:
+            pagination = pagination_from_total(total_jobs, current_page, per_page)
+        elif not summary_total and upload_jobs:
+            pagination = pagination_from_total(len(upload_jobs), current_page, per_page)
         all_videos = enrich_upload_jobs(
             upload_jobs,
             reference_bundle["device_lookup"],
@@ -1256,8 +1617,7 @@ def api_jobs_page():
             reference_bundle["account_lookup"],
             reference_bundle["workflow_lookup"],
         )
-        pagination = paginate_items(all_videos, current_page)
-        videos = pagination["items"]
+        videos = all_videos
         if editing_upload:
             editing_upload = enrich_upload_jobs(
                 [editing_upload],
@@ -1281,6 +1641,10 @@ def api_jobs_page():
         editing_upload=editing_upload,
         api_jobs_error=api_jobs_error or editing_upload_error,
         database_summary=default_database_summary(),
+        filters=filters,
+        per_page_options=PER_PAGE_OPTIONS,
+        pagination_base_params=active_filter_params(filters, pagination["per_page"]),
+        health_status=build_health_status(),
         **pagination,
         **page_context,
     )
@@ -1351,11 +1715,12 @@ def create_video():
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect_with_page("index", current_page)
+        return redirect_back("index", current_page)
 
-    insert_video(payload)
+    video_id = insert_video(payload)
+    record_video_event(video_id, "created", "สร้างรายการวิดีโอ", {"title": payload["title"]})
     flash("เพิ่มรายการวิดีโอเรียบร้อยแล้ว", "success")
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 @app.post("/videos/<int:video_id>/update")
@@ -1367,14 +1732,15 @@ def edit_video(video_id: int):
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect_with_page("index", current_page, edit=video_id)
+        return redirect_back("index", current_page, edit=video_id)
 
     if not update_video(video_id, payload):
         flash("ไม่พบรายการที่ต้องการแก้ไข", "error")
     else:
+        record_video_event(video_id, "updated", "แก้ไขข้อมูลรายการ", {"title": payload["title"], "status": payload["status"]})
         flash("อัปเดตรายการเรียบร้อยแล้ว", "success")
 
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 @app.post("/videos/<int:video_id>/send")
@@ -1382,8 +1748,9 @@ def send_video(video_id: int):
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
     success, message = sync_video_to_upload_api(video_id)
+    record_video_event(video_id, "send", message, {"success": success})
     flash(message, "success" if success else "error")
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 @app.post("/videos/<int:video_id>/run")
@@ -1391,8 +1758,9 @@ def run_only_video(video_id: int):
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
     success, message = run_video_upload(video_id)
+    record_video_event(video_id, "run", message, {"success": success})
     flash(message, "success" if success else "error")
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 @app.post("/videos/<int:video_id>/send-run")
@@ -1400,8 +1768,9 @@ def send_and_run_video(video_id: int):
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
     success, message = queue_video_upload(video_id)
+    record_video_event(video_id, "send_run", message, {"success": success})
     flash(message, "success" if success else "error")
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 @app.post("/videos/<int:video_id>/refresh-upload-status")
@@ -1420,29 +1789,32 @@ def edit_api_upload_job(upload_job_id: int):
     if errors:
         for error in errors:
             flash(error, "error")
-        return redirect_with_page("api_jobs_page", current_page, edit_upload=upload_job_id)
+        return redirect_back("api_jobs_page", current_page, edit_upload=upload_job_id)
 
     success, message, _item = update_upload_job(upload_job_id, payload)
+    record_video_event(None, "api_upload_update", message, {"upload_job_id": upload_job_id, "success": success})
     flash(message, "success" if success else "error")
     if success:
-        return redirect_with_page("api_jobs_page", current_page)
-    return redirect_with_page("api_jobs_page", current_page, edit_upload=upload_job_id)
+        return redirect_back("api_jobs_page", current_page)
+    return redirect_back("api_jobs_page", current_page, edit_upload=upload_job_id)
 
 
 @app.post("/api/uploads/<int:upload_job_id>/delete")
 def delete_api_upload_job(upload_job_id: int):
     current_page = normalize_page(request.args.get("page", type=int))
     success, message = remove_upload_job(upload_job_id)
+    record_video_event(None, "api_upload_delete", message, {"upload_job_id": upload_job_id, "success": success})
     flash(message, "success" if success else "error")
-    return redirect_with_page("api_jobs_page", current_page)
+    return redirect_back("api_jobs_page", current_page)
 
 
 @app.post("/api/uploads/<int:upload_job_id>/run")
 def run_api_upload_job(upload_job_id: int):
     current_page = normalize_page(request.args.get("page", type=int))
     success, message = run_upload_job_direct(upload_job_id)
+    record_video_event(None, "api_upload_run", message, {"upload_job_id": upload_job_id, "success": success})
     flash(message, "success" if success else "error")
-    return redirect_with_page("api_jobs_page", current_page)
+    return redirect_back("api_jobs_page", current_page)
 
 
 @app.get("/upload-summary")
@@ -1454,15 +1826,31 @@ def upload_summary():
         return jsonify({"success": False, "message": str(error), "item": default_upload_summary()}), 502
 
 
+@app.get("/health-status")
+def health_status_api():
+    item = build_health_status()
+    return jsonify({"success": item["ok"], "item": item}), 200 if item["ok"] else 503
+
+
+@app.get("/settings")
+def settings_page():
+    return render_template(
+        "settings.html",
+        settings=build_settings_context(),
+        health_status=build_health_status(),
+    )
+
+
 @app.post("/videos/<int:video_id>/delete")
 def remove_video(video_id: int):
     init_db()
     current_page = normalize_page(request.args.get("page", type=int))
     if delete_video(video_id):
+        record_video_event(video_id, "deleted", "ลบรายการวิดีโอ", {"video_id": video_id})
         flash("ลบรายการเรียบร้อยแล้ว", "success")
     else:
         flash("ไม่พบรายการที่ต้องการลบ", "error")
-    return redirect_with_page("index", current_page)
+    return redirect_back("index", current_page)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@
           <nav class="page-switcher" aria-label="View switcher">
             <a class="page-switch {{ 'is-active' if page_mode == 'database' else '' }}" href="{{ url_for('index') }}">Database</a>
             <a class="page-switch {{ 'is-active' if page_mode == 'api' else '' }}" href="{{ url_for('api_jobs_page') }}">API</a>
+            <a class="page-switch" href="{{ url_for('settings_page') }}">Settings</a>
           </nav>
 
           <div class="status-pill {{ 'is-ok' if (page_mode == 'database' and not reference_error) or (page_mode == 'api' and not api_jobs_error and not upload_summary_error) else 'is-bad' }}">
@@ -75,7 +76,7 @@
         {% else %}
           <article class="summary-card">
             <span class="summary-label">รายการใน API</span>
-            <strong>{{ videos|length }}</strong>
+            <strong>{{ total_items }}</strong>
           </article>
           <article class="summary-card summary-card-metric">
             <span class="summary-label">Upload Jobs</span>
@@ -98,6 +99,25 @@
             <small>งานที่มีปัญหา</small>
           </article>
         {% endif %}
+      </section>
+
+      <section class="health-strip" aria-label="สถานะระบบ">
+        <div class="health-overview {{ 'is-ok' if health_status.ok else 'is-bad' }}">
+          <span class="status-dot"></span>
+          <div>
+            <strong>{{ 'ระบบพร้อมใช้งาน' if health_status.ok else 'ระบบบางส่วนยังไม่พร้อม' }}</strong>
+            <small>{{ health_status.ok_count }}/{{ health_status.total_count }} service พร้อมใช้งาน</small>
+          </div>
+        </div>
+        <div class="health-services">
+          {% for service in health_status.services %}
+            <article class="health-service {{ 'is-ok' if service.ok else 'is-bad' }}">
+              <span>{{ service.label }}</span>
+              <strong>{{ 'พร้อม' if service.ok else 'มีปัญหา' }}</strong>
+              <small>{{ service.message }}</small>
+            </article>
+          {% endfor %}
+        </div>
       </section>
 
       {% if page_mode == 'api' and upload_summary_error %}
@@ -148,24 +168,62 @@
         </div>
 
         <section class="filter-bar">
-          <label class="filter-control search-control">
-            <span>ค้นหา</span>
-            <input
-              id="videoSearchInput"
-              type="search"
-              placeholder="{{ 'ค้นหาจากชื่อ, code, Device, Account' if page_mode == 'database' else 'ค้นหาจากชื่อ, Upload Job, Device, Account' }}"
-            >
-          </label>
+          <form class="filter-form" method="get" action="{{ url_for('index') if page_mode == 'database' else url_for('api_jobs_page') }}">
+            <label class="filter-control search-control">
+              <span>ค้นหา</span>
+              <input
+                id="videoSearchInput"
+                name="q"
+                type="search"
+                value="{{ filters.q }}"
+                placeholder="{{ 'ค้นหาจากชื่อ, code, platform, description' if page_mode == 'database' else 'ค้นหาในหน้าปัจจุบัน' }}"
+              >
+            </label>
 
-          <label class="filter-control">
-            <span>สถานะ</span>
-            <select id="statusFilter">
-              <option value="all">ทั้งหมด</option>
-              {% for option in (['ready', 'draft'] if page_mode == 'database' else ['ready', 'draft', 'queued', 'running', 'success', 'failed', 'posted', 'archived']) %}
-                <option value="{{ option }}">{{ option }}</option>
-              {% endfor %}
-            </select>
-          </label>
+            <label class="filter-control">
+              <span>สถานะ</span>
+              <select id="statusFilter" name="status">
+                <option value="all" {% if filters.status == 'all' %}selected{% endif %}>ทั้งหมด</option>
+                {% for option in (['ready', 'draft'] if page_mode == 'database' else ['ready', 'draft', 'queued', 'running', 'success', 'failed', 'posted', 'archived']) %}
+                  <option value="{{ option }}" {% if filters.status == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <label class="filter-control">
+              <span>Device</span>
+              <select name="device_id">
+                <option value="0">ทั้งหมด</option>
+                {% for option in device_options %}
+                  <option value="{{ option.id }}" {% if filters.device_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <label class="filter-control">
+              <span>Workflow</span>
+              <select name="workflow_id">
+                <option value="0">ทั้งหมด</option>
+                {% for option in workflow_options %}
+                  <option value="{{ option.id }}" {% if filters.workflow_id == option.id %}selected{% endif %}>{{ option.label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <label class="filter-control">
+              <span>ต่อหน้า</span>
+              <select name="per_page">
+                {% for option in per_page_options %}
+                  <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+                {% endfor %}
+              </select>
+            </label>
+
+            <div class="filter-actions">
+              <button class="primary-button" type="submit">ค้นหา</button>
+              <a class="secondary-button" href="{{ url_for('index') if page_mode == 'database' else url_for('api_jobs_page') }}">ล้าง</a>
+            </div>
+          </form>
         </section>
 
         {% if videos %}
@@ -224,7 +282,7 @@
                     {% if page_mode == 'database' %}
                         <form
                           class="inline-reference-form"
-                        action="{{ url_for('edit_video_reference', video_id=video.id, page=current_page) }}"
+                        action="{{ url_for_with_params('edit_video_reference', pagination_base_params, video_id=video.id, page=current_page) }}"
                         data-video-id="{{ video.id }}"
                       >
                         <div class="detail-grid">
@@ -248,7 +306,6 @@
                               class="inline-select inline-platform"
                               name="device_platform_id"
                               data-selected="{{ video.device_platform_id }}"
-                              required
                             >
                               <option value="{{ video.device_platform_id }}" selected>{{ video.platform_display }}</option>
                             </select>
@@ -261,7 +318,6 @@
                               class="inline-select inline-account"
                               name="account_id"
                               data-selected="{{ video.account_id }}"
-                              required
                             >
                               <option value="{{ video.account_id }}" selected>{{ video.account_display }}</option>
                             </select>
@@ -360,6 +416,23 @@
                         </details>
                       {% endif %}
                     </div>
+
+                    <details class="audit-panel">
+                      <summary>ประวัติรายการ</summary>
+                      {% if video.audit_events %}
+                        <ol class="audit-list">
+                          {% for event in video.audit_events %}
+                            <li>
+                              <strong>{{ event.event_type }}</strong>
+                              <span>{{ event.created_at_display }}</span>
+                              <p>{{ event.message }}</p>
+                            </li>
+                          {% endfor %}
+                        </ol>
+                      {% else %}
+                        <p class="audit-empty">ยังไม่มีประวัติการทำงานของรายการนี้</p>
+                      {% endif %}
+                    </details>
                   </details>
 
                   <div class="card-footer">
@@ -371,27 +444,27 @@
                     {% if page_mode == 'database' %}
                       <div class="card-actions">
                         {% if not video.upload_job_id %}
-                          <form method="post" action="{{ url_for('send_video', video_id=video.id, page=current_page) }}">
+                          <form method="post" action="{{ url_for_with_params('send_video', pagination_base_params, video_id=video.id, page=current_page) }}">
                             <button class="small-button" type="submit">ส่ง</button>
                           </form>
                         {% endif %}
                         {% if not video.upload_job_id %}
-                          <form method="post" action="{{ url_for('send_and_run_video', video_id=video.id, page=current_page) }}">
+                          <form method="post" action="{{ url_for_with_params('send_and_run_video', pagination_base_params, video_id=video.id, page=current_page) }}">
                             <button class="primary-button" type="submit">ส่งและรัน</button>
                           </form>
                         {% endif %}
-                        <a class="small-button" href="{{ url_for('index', edit=video.id, page=current_page) }}">แก้ไข</a>
-                        <form method="post" action="{{ url_for('remove_video', video_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบรายการนี้?');">
+                        <a class="small-button" href="{{ url_for_with_params('index', pagination_base_params, edit=video.id, page=current_page) }}">แก้ไข</a>
+                        <form method="post" action="{{ url_for_with_params('remove_video', pagination_base_params, video_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบรายการนี้?');">
                           <button class="danger-button" type="submit">ลบ</button>
                         </form>
                       </div>
                     {% elif page_mode == 'api' %}
                       <div class="card-actions">
-                        <a class="small-button" href="{{ url_for('api_jobs_page', edit_upload=video.id, page=current_page) }}">แก้ไข</a>
-                        <form method="post" action="{{ url_for('run_api_upload_job', upload_job_id=video.id, page=current_page) }}">
+                        <a class="small-button" href="{{ url_for_with_params('api_jobs_page', pagination_base_params, edit_upload=video.id, page=current_page) }}">แก้ไข</a>
+                        <form method="post" action="{{ url_for_with_params('run_api_upload_job', pagination_base_params, upload_job_id=video.id, page=current_page) }}">
                           <button class="small-button" type="submit">รัน Upload Job</button>
                         </form>
-                        <form method="post" action="{{ url_for('delete_api_upload_job', upload_job_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบ Upload Job นี้?');">
+                        <form method="post" action="{{ url_for_with_params('delete_api_upload_job', pagination_base_params, upload_job_id=video.id, page=current_page) }}" onsubmit="return confirm('ยืนยันการลบ Upload Job นี้?');">
                           <button class="danger-button" type="submit">ลบ Upload Job</button>
                         </form>
                       </div>
@@ -405,17 +478,17 @@
           {% if total_pages > 1 %}
             <nav class="pagination" aria-label="Pagination">
               {% if page_mode == 'database' %}
-                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for('index', page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
+                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for_with_params('index', pagination_base_params, page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
                 {% for page_number in range(1, total_pages + 1) %}
-                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for('index', page=page_number) }}">{{ page_number }}</a>
+                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for_with_params('index', pagination_base_params, page=page_number) }}">{{ page_number }}</a>
                 {% endfor %}
-                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for('index', page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
+                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for_with_params('index', pagination_base_params, page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
               {% else %}
-                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for('api_jobs_page', page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
+                <a class="pagination-link {{ 'is-disabled' if current_page == 1 else '' }}" href="{{ url_for_with_params('api_jobs_page', pagination_base_params, page=current_page - 1) if current_page > 1 else '#' }}">ก่อนหน้า</a>
                 {% for page_number in range(1, total_pages + 1) %}
-                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for('api_jobs_page', page=page_number) }}">{{ page_number }}</a>
+                  <a class="pagination-link {{ 'is-active' if page_number == current_page else '' }}" href="{{ url_for_with_params('api_jobs_page', pagination_base_params, page=page_number) }}">{{ page_number }}</a>
                 {% endfor %}
-                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for('api_jobs_page', page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
+                <a class="pagination-link {{ 'is-disabled' if current_page == total_pages else '' }}" href="{{ url_for_with_params('api_jobs_page', pagination_base_params, page=current_page + 1) if current_page < total_pages else '#' }}">ถัดไป</a>
               {% endif %}
             </nav>
           {% endif %}
@@ -450,7 +523,7 @@
           <form
           class="video-form"
           method="post"
-          action="{{ url_for('edit_video', video_id=editing_video.id, page=current_page) if editing_video else url_for('create_video', page=current_page) }}"
+          action="{{ url_for_with_params('edit_video', pagination_base_params, video_id=editing_video.id, page=current_page) if editing_video else url_for_with_params('create_video', pagination_base_params, page=current_page) }}"
         >
             <section class="form-section">
               <div class="section-head">
@@ -478,7 +551,6 @@
                     id="platformSelect"
                     name="device_platform_id"
                     data-selected="{{ form_data.device_platform_id }}"
-                    required
                   >
                     {% for option in platform_options %}
                       <option value="{{ option.id }}" {% if form_data.device_platform_id == option.id %}selected{% endif %}>{{ option.label }}</option>
@@ -493,7 +565,6 @@
                     id="accountSelect"
                     name="account_id"
                     data-selected="{{ form_data.account_id }}"
-                    required
                   >
                     {% for option in account_options %}
                       <option value="{{ option.id }}" {% if form_data.account_id == option.id %}selected{% endif %}>{{ option.label }}</option>
@@ -531,12 +602,12 @@
 
                 <label class="field">
                   <span class="field-label">Code Product</span>
-                  <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001" required>
+                  <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001">
                 </label>
 
                 <label class="field">
                   <span class="field-label">Product Link</span>
-                  <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1" required>
+                  <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1">
                 </label>
 
                 <label class="field">
@@ -568,7 +639,7 @@
               <div class="field-grid">
                 <label class="field">
                   <span class="field-label">Video URL</span>
-                  <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4" required>
+                  <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4">
                 </label>
 
                 <label class="field">
@@ -612,7 +683,7 @@
             <div class="form-actions">
               <button class="primary-button" type="submit">{{ 'บันทึกการแก้ไข' if editing_video else 'เพิ่มรายการ' }}</button>
               {% if editing_video %}
-                <a class="secondary-button" href="{{ url_for('index', page=current_page) }}">ยกเลิก</a>
+                <a class="secondary-button" href="{{ url_for_with_params('index', pagination_base_params, page=current_page) }}">ยกเลิก</a>
               {% else %}
                 <button class="secondary-button" type="button" data-close-modal>ปิด</button>
               {% endif %}
@@ -638,7 +709,7 @@
             <form
               class="video-form"
               method="post"
-              action="{{ url_for('edit_api_upload_job', upload_job_id=editing_upload.id, page=current_page) }}"
+              action="{{ url_for_with_params('edit_api_upload_job', pagination_base_params, upload_job_id=editing_upload.id, page=current_page) }}"
             >
               <section class="form-section">
                 <div class="section-head">
@@ -666,7 +737,6 @@
                       id="platformSelect"
                       name="device_platform_id"
                       data-selected="{{ form_data.device_platform_id }}"
-                      required
                     >
                       {% for option in platform_options %}
                         <option value="{{ option.id }}" {% if form_data.device_platform_id == option.id %}selected{% endif %}>{{ option.label }}</option>
@@ -681,7 +751,6 @@
                       id="accountSelect"
                       name="account_id"
                       data-selected="{{ form_data.account_id }}"
-                      required
                     >
                       {% for option in account_options %}
                         <option value="{{ option.id }}" {% if form_data.account_id == option.id %}selected{% endif %}>{{ option.label }}</option>
@@ -713,12 +782,12 @@
                 <div class="field-grid">
                   <label class="field">
                     <span class="field-label">Code Product</span>
-                    <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001" required>
+                    <input type="text" name="code_product" value="{{ form_data.code_product }}" placeholder="CODE-001">
                   </label>
 
                   <label class="field">
                     <span class="field-label">Product Link</span>
-                    <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1" required>
+                    <input type="url" name="link_product" value="{{ form_data.link_product }}" placeholder="https://example.com/product/1">
                   </label>
 
                   <label class="field">
@@ -750,7 +819,7 @@
                 <div class="field-grid">
                   <label class="field">
                     <span class="field-label">Video URL</span>
-                    <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4" required>
+                    <input type="url" name="video_url" value="{{ form_data.video_url }}" placeholder="https://cdn.example.com/video.mp4">
                   </label>
 
                   <label class="field">
@@ -793,7 +862,7 @@
 
               <div class="form-actions">
                 <button class="primary-button" type="submit">บันทึก Upload Job</button>
-                <a class="secondary-button" href="{{ url_for('api_jobs_page', page=current_page) }}">ยกเลิก</a>
+                <a class="secondary-button" href="{{ url_for_with_params('api_jobs_page', pagination_base_params, page=current_page) }}">ยกเลิก</a>
               </div>
             </form>
           {% else %}
