@@ -929,9 +929,10 @@ def merge_video_display_data(video: dict[str, Any], upload_item: dict[str, Any] 
     if "id" in upload_item:
         merged["upload_job_id"] = upload_item["id"]
 
-    if "status" in upload_item:
-        merged["status"] = upload_item["status"]
-        merged["upload_status"] = upload_item["status"]
+    upload_status = upload_item.get("status") or upload_item.get("upload_status")
+    if upload_status:
+        merged["status"] = upload_status
+        merged["upload_status"] = upload_status
 
     return {
         **merged,
@@ -1074,7 +1075,7 @@ def enrich_upload_jobs(
         platform_id = parse_positive_int(upload_job.get("device_platform_id"))
         account_id = parse_positive_int(upload_job.get("account_id"))
         workflow_id = parse_positive_int(upload_job.get("workflow_id"))
-        status = (upload_job.get("status") or "draft").strip() or "draft"
+        status = (upload_job.get("status") or upload_job.get("upload_status") or "draft").strip() or "draft"
 
         enriched.append(
             {
@@ -1328,6 +1329,7 @@ def build_upload_job_payload(video: dict[str, Any]) -> dict[str, Any]:
 
 def upload_job_to_form_data(upload_job: dict[str, Any]) -> dict[str, Any]:
     form_data = empty_upload_job_form_data()
+    upload_status = (upload_job.get("status") or upload_job.get("upload_status") or "draft").strip() or "draft"
     form_data.update(
         {
             "device_id": parse_positive_int(upload_job.get("device_id")),
@@ -1343,7 +1345,7 @@ def upload_job_to_form_data(upload_job: dict[str, Any]) -> dict[str, Any]:
             "cover_url": upload_job.get("cover_url") or "",
             "local_video_path": upload_job.get("local_video_path") or "",
             "metadata_json": json.dumps(upload_job.get("metadata") or {}, ensure_ascii=False, indent=2),
-            "status": (upload_job.get("status") or "draft").strip() or "draft",
+            "status": upload_status,
         }
     )
     return form_data
@@ -1369,6 +1371,7 @@ def update_upload_job(upload_job_id: int, payload: dict[str, Any]) -> tuple[bool
                 "local_video_path": payload["local_video_path"],
                 "metadata": payload["metadata"],
                 "status": payload["status"],
+                "upload_status": payload["status"],
             },
         )
     except RuntimeError as error:
